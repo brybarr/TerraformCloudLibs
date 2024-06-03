@@ -1,0 +1,77 @@
+---
+# https://docs.github.com/en/actions/quickstart
+# hhttps://github.com/marketplace/actions/build-and-publish-docker-image-to-github-container-registry
+name: "Terraform Modules Library Pipeline"
+
+on:  # yamllint disable-line rule:truthy
+  pull_request:  # yamllint disable-line rule:empty-values
+
+# env:
+#   TF_CLOUD_ORGANIZATION: "nolan"
+#   TF_API_TOKEN: "${{ secrets.TF_API_TOKEN }}"
+#   TF_WORKSPACE: "terraform-hashicorp-hashiqube"
+#   CONFIG_DIRECTORY: "./"
+
+jobs:
+  build-and-publish-latest:
+    if: contains( github.event.pull_request.labels.*.name, 'rebuild container image')
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checking out the repo
+      - uses: actions/checkout@v3
+
+      # https://github.com/docker/setup-qemu-action
+      # https://blog.thesparktree.com/docker-multi-arch-github-actions
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: 'arm64,amd64'
+
+      # https://github.com/docker/setup-buildx-action
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # https://github.com/marketplace/actions/docker-build-push-action
+      - uses: mr-smithers-excellent/docker-build-push@v6
+        name: Build and Push Docker image
+        with:
+          image: terraform-modules-library-container
+          tags: latest
+          registry: ghcr.io
+          multiPlatform: true
+          platform: linux/amd64,linux/arm64
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  run-run-dot-sh:
+    needs: build-and-publish-latest
+    if: |
+      always() &&
+      (needs.build-and-publish-latest.result == 'success' || needs.build-and-publish-latest.result == 'skipped')
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/terraform-modules-library-container:latest
+      options: --user 1001
+
+    steps:
+      # Checking out the repo
+      - uses: actions/checkout@v3
+
+      - name: Env variables
+        run: env | sort -V
+
+      - name: Terraform version
+        run: terraform -v
+
+      - name: Copy /home/ubuntu/.tflint.d to /github/home/
+        run: cp -r /home/ubuntu/.tflint.d /github/home/
+
+      - name: Install Pre Commit
+        run: python3 -m pip install --no-cache-dir --quiet --upgrade --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org git+https://github.com/pre-commit/pre-commit.git@v2.20.0
+
+      - name: cd GITHUB_WORKSPACE
+        run: cd $GITHUB_WORKSPACE
+
+      - name: Run
+        run: bash ./run.sh
